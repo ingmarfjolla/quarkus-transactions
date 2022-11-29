@@ -1,11 +1,13 @@
 package org.acme;
 
 import io.quarkus.hibernate.reactive.panache.common.runtime.ReactiveTransactional;
+import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.unchecked.Unchecked;
 import io.vertx.mutiny.core.Vertx;
 
 import javax.inject.Inject;
+import javax.transaction.NotSupportedException;
 import javax.transaction.SystemException;
 import javax.transaction.TransactionManager;
 import javax.ws.rs.*;
@@ -43,7 +45,9 @@ public class FruitResource {
     }
 
     @POST
-    public Uni<Fruit> create(Fruit fruit,boolean failTask2,boolean failMainTask) throws SystemException {
+    public Uni<Fruit> create(Fruit fruit) throws SystemException {
+        boolean failTask2=false;
+        boolean failMainTask=false;
         Uni<Fruit> uni=task1(fruit,failTask2,failMainTask);
         int status=tm.getStatus();
         if (javax.transaction.Status.STATUS_COMMITTED==status) {
@@ -55,8 +59,13 @@ public class FruitResource {
 
     @ReactiveTransactional
     Uni<Fruit> task1(Fruit fruit,boolean failTask2,boolean failMainTask) throws IllegalStateException, SystemException {
+        //At this point the get status returns 6 which is "status no transaction", and the get transaction is null.
+        // I would have expected the get status to return status active
+        Log.info(tm.getStatus());
+        Log.info(tm.getTransaction());
         if (failMainTask){
-            tm.getTransaction().setRollbackOnly();
+            tm.setRollbackOnly();
+//            tm.getTransaction().setRollbackOnly();
         }
         return fruitRepository.persist(fruit).
                 // this should roll back when there is a failure
