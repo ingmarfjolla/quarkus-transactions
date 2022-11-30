@@ -1,5 +1,6 @@
 package org.acme;
 
+import io.quarkus.hibernate.reactive.panache.Panache;
 import io.quarkus.hibernate.reactive.panache.common.runtime.ReactiveTransactional;
 import io.quarkus.logging.Log;
 import io.smallrye.mutiny.Uni;
@@ -11,6 +12,7 @@ import javax.transaction.NotSupportedException;
 
 import javax.transaction.SystemException;
 import javax.transaction.TransactionManager;
+import javax.transaction.Transactional;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 
@@ -26,18 +28,11 @@ import java.util.function.Function;
 @Consumes(MediaType.APPLICATION_JSON)
 public class FruitResource {
 
-  long blockTime = 500;
-
   @Inject
   Vertx vertx;
 
   @Inject
   FruitRepository fruitRepository;
-
-  @Inject TransactionManager tm;
-
-  @Inject
-  Mutiny.Session session;
 
   @GET
   @Produces(MediaType.TEXT_PLAIN)
@@ -46,35 +41,36 @@ public class FruitResource {
   }
 
   @POST
-  public Uni<Fruit> create(Fruit fruit,boolean failTask2,boolean failMainTask) throws SystemException {
-    Uni<Fruit> uni=task1(fruit,failTask2,failMainTask);
-    int status=tm.getStatus();
-    if (javax.transaction.Status.STATUS_COMMITTED==status) {
-      return uni;
-    } else {
-      return uni.call(x->undoTask2());
-    }
+  @Path("{failTask2}/{failMainTask}")
+  public Uni<Fruit> create(Fruit fruit, boolean failTask2, boolean failMainTask) throws SystemException {
+    return task1(fruit, failTask2, failMainTask).onFailure().call(x -> undoTask2().invoke(y -> {
+      System.out.println(y+" due to "+x.getMessage());
+    }));
   }
 
+  // @Transactional
   @ReactiveTransactional
   Uni<Fruit> task1(Fruit fruit,boolean failTask2,boolean failMainTask) throws IllegalStateException, SystemException {
-    if (failMainTask){
-      tm.getTransaction().setRollbackOnly();
-    }
-    return fruitRepository.persist(fruit).
-            // this should roll back when there is a failure
-            onItem().call(x->task2(failTask2));
+    return Panache.getSession().flatMap(session -> {
+      return session.withTransaction(tx -> {
+        if (failMainTask) {
+          tx.markForRollback();
+        }
+        // this should roll back when there is a failure 
+        return fruitRepository.persist(fruit).onItem().call(x->task2(failTask2));
+      };)
+    };)
   }
 
   private Uni<String> task2(boolean fail) {
-    return Uni.createFrom().emitter(e -> vertx.setTimer(blockTime, x -> e.complete("completing...")))
-        .map(Unchecked.function(x -> {
-          if (fail)
-            throw new Exception("non-transactional task failed");
-          else {
-            return x.toString();
-          }
-        }));
+    return Uni.createFrom().item("done task2").map(Unchecked.function(x -> {
+      if (fail)
+        throw new Exception("non-transactional task failed");
+      else {
+        return x;
+      }
+    }));
+
   }
 
   private Uni<String> undoTask2() {
