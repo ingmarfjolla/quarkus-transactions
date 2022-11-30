@@ -41,25 +41,22 @@ public class FruitResource {
   }
 
   @POST
-  @Path("{failTask2}/{failMainTask}")
-  public Uni<Fruit> create(Fruit fruit, boolean failTask2, boolean failMainTask) throws SystemException {
-    return task1(fruit, failTask2, failMainTask).onFailure().call(x -> undoTask2().invoke(y -> {
-      System.out.println(y+" due to "+x.getMessage());
+  @Path("{failTask2}/{failTask1}")
+  public Uni<Fruit> create(Fruit fruit, boolean failTask2, boolean failTask1) throws SystemException {
+    return task1(fruit, failTask2, failTask1).onFailure().call(x -> undoTask2().invoke(y -> {
+      System.out.println(y + " due to " + x.getMessage());
     }));
   }
 
   // @Transactional
   @ReactiveTransactional
-  Uni<Fruit> task1(Fruit fruit,boolean failTask2,boolean failMainTask) throws IllegalStateException, SystemException {
-    return Panache.getSession().flatMap(session -> {
-      return session.withTransaction(tx -> {
-        if (failMainTask) {
-          tx.markForRollback();
-        }
-        // this should roll back when there is a failure 
-        return fruitRepository.persist(fruit).onItem().call(x->task2(failTask2));
-      };)
-    };)
+  Uni<Fruit> task1(Fruit fruit, boolean failTask2, boolean failMainTask) throws IllegalStateException, SystemException {
+    if (failMainTask) {
+      return fruitRepository.persist(fruit).onItem().call(x -> task2(failTask2)).onItem().call(x -> {
+        throw new RuntimeException("task1 failed!");
+      });
+    }
+    return fruitRepository.persist(fruit).onItem().call(x -> task2(failTask2));
   }
 
   private Uni<String> task2(boolean fail) {
@@ -74,7 +71,9 @@ public class FruitResource {
   }
 
   private Uni<String> undoTask2() {
-    return Uni.createFrom().item("undone task2");
+    return Uni.createFrom().item("undone task2").onItem().invoke(x -> {
+      System.out.println("undoing task2");
+    });
   }
 
 }
